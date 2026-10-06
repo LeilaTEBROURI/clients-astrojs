@@ -1,0 +1,60 @@
+name: Déployer WebClients
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clients-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Déployer sur le VPS et vérifier l'application
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variable in SSH_HOST SSH_PORT SSH_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS; do
+            if [ -z "${!variable}" ]; then
+              echo "Secret manquant : $variable"
+              exit 1
+            fi
+          done
+          install -d -m 700 ~/.ssh
+          trap 'rm -f ~/.ssh/clients_deploy' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/clients_deploy
+          chmod 600 ~/.ssh/clients_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/clients_deploy -p "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -se' <<'DEPLOY'
+          set -euo pipefail
+          export PATH="/home/etudiant/.bun/bin:$PATH"
+          cd /var/www/clients
+          test -f .env
+          test -f data/clients.db
+          test -z "$(git status --porcelain)"
+          git pull --ff-only origin main
+          bun install --frozen-lockfile
+          bun run build
+          sudo -n /usr/bin/systemctl restart clients.service
+          curl --fail --silent --show-error --retry 10 --retry-connrefused \
+            --retry-delay 2 --max-time 10 -o /dev/null http://127.0.0.1:3344/
+          /usr/bin/systemctl is-active --quiet clients.service
+          echo "Déploiement WebClients réussi."
+          DEPLOY
