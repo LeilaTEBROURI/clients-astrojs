@@ -15,46 +15,29 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Déployer sur le VPS et vérifier l'application
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for variable in SSH_HOST SSH_PORT SSH_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS; do
-            if [ -z "${!variable}" ]; then
-              echo "Secret manquant : $variable"
-              exit 1
-            fi
-          done
-          install -d -m 700 ~/.ssh
-          trap 'rm -f ~/.ssh/clients_deploy' EXIT
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/clients_deploy
-          chmod 600 ~/.ssh/clients_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          ssh -i ~/.ssh/clients_deploy -p "$SSH_PORT" \
-            -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" 'bash -se' <<'DEPLOY'
-          set -euo pipefail
-          export PATH="/home/etudiant/.bun/bin:$PATH"
-          cd /var/www/clients
-          test -f .env
-          test -f data/clients.db
-          test -z "$(git status --porcelain)"
-          git pull --ff-only origin main
-          bun install --frozen-lockfile
-          bun run build
-          sudo -n /usr/bin/systemctl restart clients.service
-          curl --fail --silent --show-error --retry 10 --retry-connrefused \
-            --retry-delay 2 --max-time 10 -o /dev/null http://127.0.0.1:3344/
-          /usr/bin/systemctl is-active --quiet clients.service
-          echo "Déploiement WebClients réussi."
-          DEPLOY
+      - name: Déployer sur le VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          fingerprint: ${{ secrets.SSH_FINGERPRINT }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            export PATH="/home/etudiant/.bun/bin:$PATH"
+            cd /var/www/clients
+            test -f .env
+            test -f data/clients.db
+            test -z "$(git status --porcelain)"
+            git pull --ff-only origin main
+            bun install --frozen-lockfile
+            bun run build
+            sudo -n /usr/bin/systemctl restart clients.service
+            curl --fail --silent --show-error --retry 10 --retry-connrefused \
+              --retry-delay 2 --max-time 10 -o /dev/null http://127.0.0.1:3344/
+            /usr/bin/systemctl is-active --quiet clients.service
+            echo "Déploiement WebClients réussi."
